@@ -35,7 +35,7 @@ set.seed(1)
 
 ## Problem 1
 
-```{r}
+```{r message = FALSE}
 homicide_df = 
   read_csv("data/homicide-data.csv", na = c("", "NA", "Unknown")) %>% 
   mutate(
@@ -104,4 +104,102 @@ models_results_df %>%
   geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper)) + 
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
+
+
+## Problem 2
+
+#### Load and clean the data for regression analysis.
+
+```{r baby_df, message = FALSE, warning = FALSE}
+baby_df = 
+  read_csv("./data/birthweight.csv") %>% 
+  janitor::clean_names() %>% 
+  mutate(
+    babysex = factor(babysex),
+    babysex = fct_recode(babysex, male = "1", female = "2"),
+    frace = factor(frace),
+    frace = fct_recode(frace, white = "1", black = "2", asian = "3", puerto_rican = "4", other = "8"),
+    malform = factor(malform),
+    malform = fct_recode(malform, absent = "0", present = "1"),
+    mrace = factor(mrace),
+    mrace = fct_recode(mrace, white = "1", black = "2", asian = "3", puerto_rican = "4"),
+    delwt = delwt * 453.59237,
+    ppwt = ppwt * 453.59237,
+    wtgain = wtgain * 453.59237
+  )
+
+sum(is.na(baby_df))
+```
+
+The resulting dataset `baby_df` contains the following `r ncol(baby_df)` variables: `r names(baby_df)`.  This dataset has `r nrow(baby_df)` observations and `r sum(is.na(baby_df))` missing value. Numeric variables `babysex`, `frace`, `malform`, and `mrace` have been converted into factor variables. The units of variables `delwt`, `ppwt` and `wtgain` have been converted from pounds to grams for further analyses.
+
+
+#### Propose a regression model for birthweight.
+
+```{r stepwise model}
+step_mod = step(lm(bwt ~., data = baby_df), direction = 'both', trace = FALSE)
+
+summary(step_mod)
+```
+
+Stepwise algorithm, with AIC being the criteria, has been used to find the suitable regression model for birthweight. Finally, we have the optimal regression model: `bwt ~ babysex + bhead + blength + delwt + fincome + gaweeks + mheight + mrace + parity + ppwt + smoken`. The multiple r-squared is 0.7181, and adjusted r-squared is 0.7173. The p value is smaller than 2.2e-16.
+
+
+#### Show a plot of model residuals against fitted values.
+
+```{r residuals fitted values plot}
+baby_df %>% 
+  add_predictions(step_mod) %>% 
+  add_residuals(step_mod) %>% 
+  ggplot(aes(x = pred, y = resid)) + 
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +
+  labs(title = "Fitted Values vs. Model Residuals",
+       x = "Fitted Values", 
+       y = "Model Residuals",
+       caption = "Data from Child’s Birthweight Dataset")
+```
+
+From the graph, we could see a big cluster of points. In the right side where fitted values are large, the model residuals tend to evenly distributed around 0. In the left side where fitted values are small, most model residuals are positive and some some model residuals a far greater than 0.
+
+
+#### Compare my model to two others.
+
+```{r cross validation comparisons, message = FALSE, warning = FALSE}
+cv_df = 
+  crossv_mc(baby_df, 100) %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  ) %>% 
+  mutate(
+    model_1 = map(.x = train, ~lm(bwt ~ blength + gaweeks, data = .x)),
+    model_2 = map(.x = train, ~lm(bwt ~ bhead * blength * babysex, data = .x)),
+    model_step = map(.x = train, ~lm(bwt ~ babysex + bhead + blength + delwt + fincome + gaweeks + mheight + mrace + parity + ppwt + smoken, data = .x))
+  ) %>% 
+  mutate(
+    rmse_model_1 = map2_dbl(.x = model_1, .y = test, ~rmse(model = .x, data = .y)),
+    rmse_model_2 = map2_dbl(.x = model_2, .y = test, ~rmse(model = .x, data = .y)),
+    rmse_model_step = map2_dbl(.x = model_step, .y = test, ~rmse(model = .x, data = .y))
+  )
+
+
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_"
+  ) %>% 
+  mutate(model = fct_reorder(model,rmse)) %>%   
+  ggplot(aes(x = model, y = rmse, fill = model)) +
+  geom_violin() +
+  labs(title = "Cross Validation Comparisons",
+       x = "Model",
+       y = "RMSE",
+       caption = "Data from Child’s Birthweight Dataset")
+```
+
+From the violin plot, we could see that my model `rmse_model_step` (bwt ~ babysex + bhead + blength + delwt + fincome + gaweeks + mheight + mrace + parity + ppwt + smoken) has lower RMSE than the other two models: `model_1` (bwt ~ blength + gaweeks) and `model_2` (bwt ~ bhead * blength * babysex). Therefore, `rmse_model_step` has the best performance among these three models, and `model_1` with main effect only has the worst performance among all three models.
 
